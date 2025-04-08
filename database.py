@@ -18,27 +18,29 @@ class Database:
         self._create_tables()
     
     def _create_tables(self):
-        """Создание таблиц при первом запуске"""
+        # Создаем таблицу users без параметра для DEFAULT
         self.cursor.execute("""
             CREATE TABLE IF NOT EXISTS users (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 username TEXT UNIQUE NOT NULL,
-                role TEXT NOT NULL DEFAULT ?,
+                role TEXT NOT NULL DEFAULT 'user',
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
-        """, (Roles.DEFAULT_ROLE,))
+        """)
         
+        # Таблица tasks
         self.cursor.execute("""
             CREATE TABLE IF NOT EXISTS tasks (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                description TEXT NOT NULL,
-                status TEXT NOT NULL DEFAULT ?,
+                title TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'new',
                 created_by TEXT NOT NULL,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY (created_by) REFERENCES users(username)
             )
-        """, (TaskStatuses.DEFAULT_STATUS,))
+        """)
         
+        # Таблица comments
         self.cursor.execute("""
             CREATE TABLE IF NOT EXISTS comments (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,

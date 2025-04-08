@@ -7,7 +7,7 @@
 class BotConfig:
     """Настройки бота и администратора"""
     # Токен бота (получить у @BotFather)
-    BOT_TOKEN = "ВАШ_ТОКЕН_БОТА"
+    BOT_TOKEN = "7631959629:AAFx_lCo0k5L6uyi1d0FykaJZBZOl9_SROI"
     
     # Username администратора (без @)
     ADMIN_USERNAME = "NN_Danila_Belov"
