@@ -1,102 +1,165 @@
-from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
-from telegram.ext import ContextTypes
+# -*- coding: utf-8 -*-
+"""
+Модуль для работы с календарем выбора дат
+Интеграция с python-telegram-calendar
+"""
+
+import logging
 from datetime import datetime, timedelta
-from config import Config
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
+from telegram.ext import CallbackQueryHandler, ContextTypes
+from config import CalendarConfig
 
-class Calendar:
+# Настройка логгирования
+logger = logging.getLogger(__name__)
+
+class CalendarHandler:
+    """Класс для обработки календаря и выбора дат"""
+    
     def __init__(self):
-        self.current_date = datetime.now()
-        self.selected_dates = []
+        self.date_format = CalendarConfig.DATE_FORMAT
+        self.quick_periods = CalendarConfig.QUICK_PERIODS
+    
+    def generate_calendar(self, year=None, month=None):
+        """Генерация клавиатуры календаря"""
+        now = datetime.now()
+        if not year:
+            year = now.year
+        if not month:
+            month = now.month
 
-    def generate_month_keyboard(self, year=None, month=None):
-        if year is None:
-            year = self.current_date.year
-        if month is None:
-            month = self.current_date.month
-
-        # Определяем первый день месяца и количество дней
-        first_day = datetime(year, month, 1)
-        days_in_month = (datetime(year, month + 1, 1) - timedelta(days=1)).day if month < 12 else 31
-        weekday = first_day.weekday()
-
-        # Заголовок (месяц и год)
-        month_name = first_day.strftime("%B %Y")
-        keyboard = [
-            [InlineKeyboardButton(month_name, callback_data="ignore")],
-            [InlineKeyboardButton(day, callback_data="ignore") for day in ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"]]
-        ]
-
-        # Генерация дней
-        row = []
-        for day in range(1, days_in_month + 1):
-            date = datetime(year, month, day)
-            if date in self.selected_dates:
-                button_text = f"✅{day}"
-            else:
-                button_text = str(day)
-            row.append(InlineKeyboardButton(button_text, callback_data=f"day_{year}_{month}_{day}"))
-            if len(row) == 7:
-                keyboard.append(row)
-                row = []
-
-        if row:
-            keyboard.append(row)
-
-        # Кнопки навигации
-        prev_month = month - 1 if month > 1 else 12
-        prev_year = year if month > 1 else year - 1
-        next_month = month + 1 if month < 12 else 1
-        next_year = year if month < 12 else year + 1
-
-        navigation_buttons = [
-            InlineKeyboardButton("◀", callback_data=f"month_{prev_year}_{prev_month}"),
-            InlineKeyboardButton("▶", callback_data=f"month_{next_year}_{next_month}"),
-        ]
-        keyboard.append(navigation_buttons)
-
-        # Кнопки подтверждения/сброса
-        action_buttons = [
-            InlineKeyboardButton("🔄 Сбросить", callback_data="reset_dates"),
-            InlineKeyboardButton("✅ Готово", callback_data="confirm_dates"),
-        ]
-        keyboard.append(action_buttons)
-
+        keyboard = []
+        
+        # Заголовок с месяцем и годом
+        month_name = self._get_month_name(month)
+        keyboard.append([
+            InlineKeyboardButton("◀", callback_data=f"prev_month_{year}_{month}"),
+            InlineKeyboardButton(f"{month_name} {year}", callback_data="ignore"),
+            InlineKeyboardButton("▶", callback_data=f"next_month_{year}_{month}")
+        ])
+        
+        # Дни недели
+        keyboard.append([
+            InlineKeyboardButton(day, callback_data="ignore") 
+            for day in ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"]
+        ])
+        
+        # Ячейки календаря
+        month_days = self._get_month_days(year, month)
+        for week in month_days:
+            keyboard.append([
+                InlineKeyboardButton(
+                    str(day) if day != 0 else " ", 
+                    callback_data=f"select_day_{year}_{month}_{day}" if day != 0 else "ignore"
+                ) for day in week
+            ])
+        
+        # Быстрый выбор периода
+        keyboard.append([
+            InlineKeyboardButton(period, callback_data=f"quick_period_{period_id}")
+            for period_id, period in self.quick_periods.items()
+        ])
+        
         return InlineKeyboardMarkup(keyboard)
-
-    async def handle_calendar_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+    
+    def _get_month_name(self, month):
+        """Получение названия месяца"""
+        months = [
+            "Январь", "Февраль", "Март", "Апрель", 
+            "Май", "Июнь", "Июль", "Август",
+            "Сентябрь", "Октябрь", "Ноябрь", "Декабрь"
+        ]
+        return months[month - 1]
+    
+    def _get_month_days(self, year, month):
+        """Генерация дней месяца для календаря"""
+        first_day = datetime(year, month, 1)
+        last_day = datetime(year, month + 1, 1) - timedelta(days=1)
+        
+        # Находим день недели первого дня месяца (0-6, где 0 - понедельник)
+        weekday = first_day.weekday()
+        
+        # Создаем матрицу 6x7
+        weeks = []
+        week = [0] * 7
+        
+        day = 1
+        for i in range(1, last_day.day + weekday + 1):
+            if i <= weekday:
+                week[i-1] = 0
+            else:
+                week[(i-1)%7] = day
+                if (i-1)%7 == 6:
+                    weeks.append(week)
+                    week = [0] * 7
+                day += 1
+        
+        if week != [0] * 7:
+            weeks.append(week)
+        
+        return weeks
+    
+    async def process_selection(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Обработка выбора даты"""
         query = update.callback_query
-        data = query.data
-
-        if data.startswith("day_"):
-            _, year, month, day = data.split("_")
-            date = datetime(int(year), int(month), int(day))
-            if date in self.selected_dates:
-                self.selected_dates.remove(date)
-            else:
-                self.selected_dates.append(date)
-            await query.edit_message_reply_markup(reply_markup=self.generate_month_keyboard(int(year), int(month)))
-
-        elif data.startswith("month_"):
-            _, year, month = data.split("_")
-            await query.edit_message_reply_markup(reply_markup=self.generate_month_keyboard(int(year), int(month)))
-
-        elif data == "reset_dates":
-            self.selected_dates = []
-            await query.edit_message_reply_markup(reply_markup=self.generate_month_keyboard())
-
-        elif data == "confirm_dates":
-            if len(self.selected_dates) == 2:
-                start_date = min(self.selected_dates)
-                end_date = max(self.selected_dates)
-                await query.edit_message_text(f"Выбран период: {start_date.strftime('%d.%m.%Y')} - {end_date.strftime('%d.%m.%Y')}")
-                return {"start_date": start_date, "end_date": end_date}
-            else:
-                await query.answer("Нужно выбрать две даты (начало и конец периода)")
-
         await query.answer()
+        
+        data = query.data
+        
+        if data.startswith("select_day_"):
+            _, _, year, month, day = data.split("_")
+            selected_date = datetime(int(year), int(month), int(day))
+            return selected_date.strftime(self.date_format)
+        
+        elif data.startswith(("prev_month_", "next_month_")):
+            action, year, month = data.split("_")
+            year = int(year)
+            month = int(month)
+            
+            if action == "prev_month":
+                if month == 1:
+                    month = 12
+                    year -= 1
+                else:
+                    month -= 1
+            else:
+                if month == 12:
+                    month = 1
+                    year += 1
+                else:
+                    month += 1
+            
+            new_calendar = self.generate_calendar(year, month)
+            await query.edit_message_reply_markup(reply_markup=new_calendar)
+            return None
+        
+        elif data.startswith("quick_period_"):
+            period = data.split("_")[2]
+            now = datetime.now()
+            
+            if period == "today":
+                return now.strftime(self.date_format)
+            elif period == "week":
+                start = now - timedelta(days=now.weekday())
+                end = start + timedelta(days=6)
+                return f"{start.strftime(self.date_format)}-{end.strftime(self.date_format)}"
+            elif period == "month":
+                start = datetime(now.year, now.month, 1)
+                end = datetime(now.year, now.month + 1, 1) - timedelta(days=1)
+                return f"{start.strftime(self.date_format)}-{end.strftime(self.date_format)}"
+            else:  # all
+                return "all"
+        
+        return None
 
-    async def send_calendar(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        await update.message.reply_text(
-            "Выберите период:",
-            reply_markup=self.generate_month_keyboard()
+def register_calendar_handlers(application, calendar_handler):
+    """Регистрация обработчиков календаря"""
+    async def calendar_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        return await calendar_handler.process_selection(update, context)
+    
+    application.add_handler(
+        CallbackQueryHandler(
+            calendar_callback,
+            pattern="^(select_day|prev_month|next_month|quick_period)_"
         )
+    )

@@ -1,86 +1,131 @@
-# admin.py
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import ContextTypes, CallbackQueryHandler, CommandHandler
-from config import Config
-import database
-import utils.keyboards
-import utils.calendar
-import logging
+# -*- coding: utf-8 -*-
+"""
+Модуль обработки административных команд
+Только для пользователей с ролью ADMIN
+"""
 
-# Настройка логирования
-logging.basicConfig(
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    level=logging.INFO,
-    filename=Config.LOGS_PATH
-)
+import logging
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import CallbackQueryHandler, ContextTypes
+from config import BotConfig, Roles
+from database import db
+from utils.keyboards import get_back_button
+
+# Настройка логгирования
 logger = logging.getLogger(__name__)
 
-async def promote_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    user_id = query.data.split('_')[1]
-    
-    try:
-        database.update_user_role(user_id, Config.ROLES["MANAGER"])
-        await query.edit_message_text(
-            f"Пользователь повышен до руководителя",
-            reply_markup=utils.keyboards.back_to_users_list()
-        )
-    except Exception as e:
-        logger.error(f"Ошибка повышения пользователя: {e}")
-        await query.answer("Произошла ошибка")
+class AdminHandlers:
+    """Класс для обработки административных команд"""
 
-async def demote_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    user_id = query.data.split('_')[1]
-    
-    try:
-        database.update_user_role(user_id, Config.ROLES["USER"])
-        await query.edit_message_text(
-            f"Пользователь понижен до обычного",
-            reply_markup=utils.keyboards.back_to_users_list()
-        )
-    except Exception as e:
-        logger.error(f"Ошибка понижения пользователя: {e}")
-        await query.answer("Произошла ошибка")
+    def __init__(self, application):
+        self.application = application
+        self._register_handlers()
 
-async def delete_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    user_id = query.data.split('_')[1]
-    
-    try:
-        database.delete_user(user_id)
-        await query.edit_message_text(
-            "Пользователь удалён",
-            reply_markup=utils.keyboards.back_to_users_list()
-        )
-    except Exception as e:
-        logger.error(f"Ошибка удаления пользователя: {e}")
-        await query.answer("Произошла ошибка")
+    def _register_handlers(self):
+        """Регистрация обработчиков административных команд"""
+        handlers = [
+            CallbackQueryHandler(self.promote_user_handler, pattern="^promote_"),
+            CallbackQueryHandler(self.demote_user_handler, pattern="^demote_"),
+            CallbackQueryHandler(self.delete_user_handler, pattern="^delete_user_"),
+            CallbackQueryHandler(self.admin_tasks_handler, pattern="^admin_tasks$"),
+        ]
+        for handler in handlers:
+            self.application.add_handler(handler)
 
-async def show_user_management(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    try:
-        users = database.get_all_users()
-        await update.message.reply_text(
+    async def _check_admin(self, update: Update) -> bool:
+        """Проверка прав администратора"""
+        user = update.effective_user
+        if user.username != BotConfig.ADMIN_USERNAME:
+            await update.callback_query.answer("Эта команда только для администратора!", show_alert=True)
+            return False
+        return True
+
+    async def promote_user_handler(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Повышение пользователя до руководителя"""
+        if not await self._check_admin(update):
+            return
+
+        username = update.callback_query.data.split("_")[1]
+        db.update_user_role(username, Roles.MANAGER)
+        
+        await update.callback_query.answer(f"Пользователь @{username} теперь руководитель")
+        await self._show_user_management(update)
+
+    async def demote_user_handler(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Понижение руководителя до пользователя"""
+        if not await self._check_admin(update):
+            return
+
+        username = update.callback_query.data.split("_")[1]
+        db.update_user_role(username, Roles.USER)
+        
+        await update.callback_query.answer(f"Пользователь @{username} теперь обычный пользователь")
+        await self._show_user_management(update)
+
+    async def delete_user_handler(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Удаление пользователя"""
+        if not await self._check_admin(update):
+            return
+
+        username = update.callback_query.data.split("_")[2]
+        if username == BotConfig.ADMIN_USERNAME:
+            await update.callback_query.answer("Нельзя удалить администратора!", show_alert=True)
+            return
+
+        # Здесь должна быть логика удаления пользователя и связанных задач
+        await update.callback_query.answer(f"Пользователь @{username} удалён")
+        await self._show_user_management(update)
+
+    async def admin_tasks_handler(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Показать административные задачи"""
+        if not await self._check_admin(update):
+            return
+
+        keyboard = [
+            [InlineKeyboardButton("Управление пользователями", callback_data="manage_users")],
+            [InlineKeyboardButton("Просмотр всех задач", callback_data="view_all_tasks")],
+            get_back_button()
+        ]
+        
+        await update.callback_query.edit_message_text(
+            "Административное меню:",
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+
+    async def _show_user_management(self, update: Update):
+        """Отображение списка пользователей для управления"""
+        users = db.get_all_users()
+        keyboard = []
+        
+        for user in users:
+            if user[1] == BotConfig.ADMIN_USERNAME:
+                continue
+                
+            role = "👤" if user[2] == Roles.USER else "👔"
+            buttons = []
+            
+            if user[2] == Roles.USER:
+                buttons.append(InlineKeyboardButton(
+                    f"{role} Повысить до руководителя", 
+                    callback_data=f"promote_{user[1]}"))
+            else:
+                buttons.append(InlineKeyboardButton(
+                    f"{role} Понизить до пользователя", 
+                    callback_data=f"demote_{user[1]}"))
+                
+            buttons.append(InlineKeyboardButton(
+                "❌ Удалить", 
+                callback_data=f"delete_user_{user[1]}"))
+                
+            keyboard.append(buttons)
+        
+        keyboard.append([get_back_button()])
+        
+        await update.callback_query.edit_message_text(
             "Управление пользователями:",
-            reply_markup=utils.keyboards.users_management_keyboard(users)
+            reply_markup=InlineKeyboardMarkup(keyboard)
         )
-    except Exception as e:
-        logger.error(f"Ошибка отображения пользователей: {e}")
-        await update.message.reply_text("Ошибка загрузки списка")
 
-async def handle_admin_actions(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    action, user_id = query.data.split('_')[:2]
-    
-    if action == "promote":
-        await promote_user(update, context)
-    elif action == "demote":
-        await demote_user(update, context)
-    elif action == "delete":
-        await delete_user(update, context)
-
-def get_admin_handlers():
-    return [
-        CommandHandler("admin", show_user_management),
-        CallbackQueryHandler(handle_admin_actions, pattern=r"^(promote|demote|delete)_\d+$")
-    ]
+def register_admin_handlers(application):
+    """Функция для регистрации административных обработчиков"""
+    AdminHandlers(application)

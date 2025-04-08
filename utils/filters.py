@@ -1,142 +1,114 @@
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import ContextTypes
-from config import Config
-import datetime
-from database import get_tasks_from_db
+# -*- coding: utf-8 -*-
+"""
+Модуль для фильтрации задач по различным параметрам
+"""
 
+from datetime import datetime, timedelta
+from config import TaskStatuses, CalendarConfig
 
-class TaskFilters:
-    @staticmethod
-    async def apply_filters(update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Применяет фильтры и показывает задачи"""
-        user_id = update.effective_user.id
-        user_role = context.user_data.get('role', Config.ROLES['USER'])
-        filters = context.user_data.get('filters', {})
-
-        # Получаем задачи с учетом роли
-        if user_role == Config.ROLES['USER']:
-            tasks = get_tasks_from_db(created_by=user_id)
-        else:
-            tasks = get_tasks_from_db()
-
-        # Применяем фильтры
-        if 'status' in filters:
-            tasks = [t for t in tasks if t['status'] == filters['status']]
-        if 'date_range' in filters:
-            start_date, end_date = filters['date_range']
-            tasks = [
-                t for t in tasks
-                if start_date <= datetime.datetime.strptime(t['created_at'], '%Y-%m-%d %H:%M:%S') <= end_date
-            ]
-
-        # Показываем задачи
-        await TaskFilters._show_filtered_tasks(update, tasks, user_role)
+class TaskFilter:
+    """Класс для фильтрации списка задач"""
 
     @staticmethod
-    async def _show_filtered_tasks(update: Update, tasks: list, user_role: str):
-        """Отображает отфильтрованные задачи с пагинацией"""
-        if not tasks:
-            await update.callback_query.edit_message_text("Задачи не найдены.")
-            return
-
-        keyboard = []
-        for task in tasks[:5]:  # Показываем первые 5 задач
-            btn_text = f"#{task['id']} - {task['description'][:30]}..."
-            keyboard.append([InlineKeyboardButton(btn_text, callback_data=f"task_{task['id']}")])
-
-        # Добавляем кнопки фильтров
-        filter_btn = InlineKeyboardButton("🔄 Фильтры", callback_data="open_filters")
-        keyboard.append([filter_btn])
-
-        # Добавляем пагинацию, если задач больше 5
-        if len(tasks) > 5:
-            pagination_row = [
-                InlineKeyboardButton("⬅️", callback_data="prev_page"),
-                InlineKeyboardButton("1/2", callback_data="page_info"),
-                InlineKeyboardButton("➡️", callback_data="next_page")
-            ]
-            keyboard.append(pagination_row)
-
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        await update.callback_query.edit_message_text(
-            f"Найдено задач: {len(tasks)}",
-            reply_markup=reply_markup
-        )
+    def filter_by_status(tasks, status):
+        """
+        Фильтрация задач по статусу
+        :param tasks: Список задач из БД
+        :param status: Статус для фильтрации (из TaskStatuses)
+        :return: Отфильтрованный список задач
+        """
+        if status.lower() == 'all':
+            return tasks
+        return [task for task in tasks if task[2] == status]
 
     @staticmethod
-    async def show_filter_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Показывает меню фильтров"""
-        keyboard = [
-            [
-                InlineKeyboardButton("🔘 Все", callback_data="filter_all"),
-                InlineKeyboardButton("Новые", callback_data="filter_new")
-            ],
-            [
-                InlineKeyboardButton("В работе", callback_data="filter_in_progress"),
-                InlineKeyboardButton("Завершённые", callback_data="filter_done")
-            ],
-            [
-                InlineKeyboardButton("📅 Сегодня", callback_data="filter_today"),
-                InlineKeyboardButton("📅 Неделя", callback_data="filter_week")
-            ],
-            [
-                InlineKeyboardButton("📅 Месяц", callback_data="filter_month"),
-                InlineKeyboardButton("📅 Произвольный", callback_data="filter_custom")
-            ],
-            [
-                InlineKeyboardButton("❌ Сбросить", callback_data="filter_reset"),
-                InlineKeyboardButton("🔙 Назад", callback_data="cancel_filters")
-            ]
-        ]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        await update.callback_query.edit_message_text(
-            "Выберите фильтры:",
-            reply_markup=reply_markup
-        )
+    def filter_by_period(tasks, period):
+        """
+        Фильтрация задач по временному периоду
+        :param tasks: Список задач из БД
+        :param period: Период для фильтрации (сегодня/неделя/месяц/все)
+        :return: Отфильтрованный список задач
+        """
+        if period == 'all':
+            return tasks
+
+        now = datetime.now()
+        date_format = CalendarConfig.DATE_FORMAT
+
+        if period == 'today':
+            today_str = now.strftime(date_format)
+            return [task for task in tasks 
+                   if datetime.strptime(task[4], date_format).date() == now.date()]
+
+        elif period == 'week':
+            week_start = now - timedelta(days=now.weekday())
+            week_end = week_start + timedelta(days=6)
+            return [task for task in tasks 
+                   if week_start.date() <= datetime.strptime(task[4], date_format).date() <= week_end.date()]
+
+        elif period == 'month':
+            month_start = datetime(now.year, now.month, 1)
+            month_end = datetime(now.year, now.month + 1, 1) - timedelta(days=1)
+            return [task for task in tasks 
+                   if month_start.date() <= datetime.strptime(task[4], date_format).date() <= month_end.date()]
+
+        return tasks
 
     @staticmethod
-    async def handle_filter_selection(update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Обрабатывает выбор фильтра"""
-        query = update.callback_query
-        data = query.data
+    def filter_by_custom_date(tasks, start_date, end_date):
+        """
+        Фильтрация задач по произвольному периоду
+        :param tasks: Список задач из БД
+        :param start_date: Начальная дата (str в формате CalendarConfig.DATE_FORMAT)
+        :param end_date: Конечная дата (str в формате CalendarConfig.DATE_FORMAT)
+        :return: Отфильтрованный список задач
+        """
+        date_format = CalendarConfig.DATE_FORMAT
+        try:
+            start = datetime.strptime(start_date, date_format).date()
+            end = datetime.strptime(end_date, date_format).date()
+            
+            return [task for task in tasks 
+                   if start <= datetime.strptime(task[4], date_format).date() <= end]
+        except ValueError:
+            return tasks
 
-        if data == "filter_all":
-            context.user_data['filters'] = {}
-        elif data.startswith("filter_"):
-            status_map = {
-                "filter_new": "new",
-                "filter_in_progress": "in_progress",
-                "filter_done": "done"
-            }
-            if data in status_map:
-                context.user_data['filters'] = {'status': status_map[data]}
-            elif data == "filter_today":
-                today = datetime.datetime.now()
-                context.user_data['filters'] = {
-                    'date_range': (
-                        today.replace(hour=0, minute=0, second=0),
-                        today.replace(hour=23, minute=59, second=59)
-                    )
-                }
-            elif data == "filter_week":
-                now = datetime.datetime.now()
-                start = now - datetime.timedelta(days=now.weekday())
-                end = start + datetime.timedelta(days=6)
-                context.user_data['filters'] = {
-                    'date_range': (
-                        start.replace(hour=0, minute=0, second=0),
-                        end.replace(hour=23, minute=59, second=59)
-                    )
-                }
-            elif data == "filter_month":
-                now = datetime.datetime.now()
-                start = now.replace(day=1)
-                end = (start + datetime.timedelta(days=32)).replace(day=1) - datetime.timedelta(days=1)
-                context.user_data['filters'] = {
-                    'date_range': (
-                        start.replace(hour=0, minute=0, second=0),
-                        end.replace(hour=23, minute=59, second=59)
-                    )
-                }
+    @staticmethod
+    def filter_by_author(tasks, username):
+        """
+        Фильтрация задач по автору
+        :param tasks: Список задач из БД
+        :param username: Имя пользователя (без @)
+        :return: Отфильтрованный список задач
+        """
+        return [task for task in tasks if task[3] == username]
 
-        await TaskFilters.apply_filters(update, context)
+    @staticmethod
+    def apply_filters(tasks, status_filter=None, period_filter=None, 
+                    author_filter=None, custom_dates=None):
+        """
+        Применение нескольких фильтров одновременно
+        :param tasks: Исходный список задач
+        :param status_filter: Фильтр по статусу
+        :param period_filter: Фильтр по периоду (сегодня/неделя/месяц)
+        :param author_filter: Фильтр по автору
+        :param custom_dates: Кортеж (start_date, end_date) для произвольного периода
+        :return: Отфильтрованный список задач
+        """
+        filtered_tasks = tasks
+        
+        if status_filter:
+            filtered_tasks = TaskFilter.filter_by_status(filtered_tasks, status_filter)
+            
+        if period_filter:
+            filtered_tasks = TaskFilter.filter_by_period(filtered_tasks, period_filter)
+            
+        if custom_dates:
+            start_date, end_date = custom_dates
+            filtered_tasks = TaskFilter.filter_by_custom_date(
+                filtered_tasks, start_date, end_date)
+                
+        if author_filter:
+            filtered_tasks = TaskFilter.filter_by_author(filtered_tasks, author_filter)
+            
+        return filtered_tasks

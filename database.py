@@ -1,145 +1,159 @@
+# -*- coding: utf-8 -*-
+"""
+Модуль для работы с базой данных SQLite
+Соответствует концепции Task Tracker Bot
+"""
+
 import sqlite3
 from datetime import datetime
-from config import Config
+from config import DatabaseConfig, Roles, TaskStatuses, BotConfig
 
 class Database:
+    """Класс для работы с базой данных"""
+    
     def __init__(self):
-        self.conn = sqlite3.connect(Config.DATABASE_PATH)
-        self.cursor = self.conn.cursor()
-        self._init_db()
-
-    def _init_db(self):
-        """Создает таблицы, если они не существуют."""
+        """Инициализация соединения с БД"""
+        self.connection = sqlite3.connect(DatabaseConfig.DB_FILENAME)
+        self.cursor = self.connection.cursor()
+        self._create_tables()
+    
+    def _create_tables(self):
+        """Создание таблиц при первом запуске"""
         self.cursor.execute("""
             CREATE TABLE IF NOT EXISTS users (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                username TEXT NOT NULL UNIQUE,
-                role TEXT NOT NULL DEFAULT 'user'
+                username TEXT UNIQUE NOT NULL,
+                role TEXT NOT NULL DEFAULT ?,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
-        """)
-
+        """, (Roles.DEFAULT_ROLE,))
+        
         self.cursor.execute("""
             CREATE TABLE IF NOT EXISTS tasks (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 description TEXT NOT NULL,
-                status TEXT NOT NULL DEFAULT 'new',
+                status TEXT NOT NULL DEFAULT ?,
                 created_by TEXT NOT NULL,
-                created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY (created_by) REFERENCES users(username)
             )
-        """)
-
+        """, (TaskStatuses.DEFAULT_STATUS,))
+        
         self.cursor.execute("""
             CREATE TABLE IF NOT EXISTS comments (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 task_id INTEGER NOT NULL,
                 username TEXT NOT NULL,
                 text TEXT NOT NULL,
-                created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY (task_id) REFERENCES tasks(id),
                 FOREIGN KEY (username) REFERENCES users(username)
             )
         """)
-        self.conn.commit()
-
-    def add_user(self, username: str, role: str = 'user'):
-        """Добавляет пользователя в БД."""
-        self.cursor.execute(
-            "INSERT INTO users (username, role) VALUES (?, ?)",
-            (username, role)
-        )
-        self.conn.commit()
-
+        self.connection.commit()
+    
+    # ========== Users ==========
+    def add_user(self, username: str, role: str = Roles.DEFAULT_ROLE):
+        """Добавление нового пользователя"""
+        try:
+            self.cursor.execute(
+                "INSERT INTO users (username, role) VALUES (?, ?)",
+                (username, role)
+            )
+            self.connection.commit()
+            return True
+        except sqlite3.IntegrityError:
+            return False
+    
     def get_user(self, username: str):
-        """Возвращает данные пользователя."""
+        """Получение данных пользователя"""
         self.cursor.execute(
-            "SELECT * FROM users WHERE username = ?", 
+            "SELECT username, role FROM users WHERE username = ?",
             (username,)
         )
         return self.cursor.fetchone()
-
-    def add_task(self, description: str, created_by: str):
-        """Создает новую задачу."""
+    
+    def update_user_role(self, username: str, new_role: str):
+        """Изменение роли пользователя"""
         self.cursor.execute(
-            """
-            INSERT INTO tasks (description, created_by) 
-            VALUES (?, ?)
-            """,
+            "UPDATE users SET role = ? WHERE username = ?",
+            (new_role, username)
+        )
+        return self.connection.commit()
+    
+    # ========== Tasks ==========
+    def add_task(self, description: str, created_by: str):
+        """Добавление новой задачи"""
+        self.cursor.execute(
+            "INSERT INTO tasks (description, created_by) VALUES (?, ?)",
             (description, created_by)
         )
-        self.conn.commit()
+        self.connection.commit()
         return self.cursor.lastrowid
-
+    
     def get_task(self, task_id: int):
-        """Возвращает задачу по ID."""
+        """Получение данных задачи"""
         self.cursor.execute(
-            "SELECT * FROM tasks WHERE id = ?", 
+            "SELECT * FROM tasks WHERE id = ?",
             (task_id,)
         )
         return self.cursor.fetchone()
-
-    def get_user_tasks(self, username: str, status: str = None):
-        """Возвращает задачи пользователя с фильтром по статусу."""
-        query = "SELECT * FROM tasks WHERE created_by = ?"
-        params = [username]
-        
-        if status:
-            query += " AND status = ?"
-            params.append(status)
-        
-        self.cursor.execute(query, params)
-        return self.cursor.fetchall()
-
-    def get_all_tasks(self, status: str = None):
-        """Возвращает все задачи с фильтром по статусу."""
-        query = "SELECT * FROM tasks"
-        params = []
-        
-        if status:
-            query += " WHERE status = ?"
-            params.append(status)
-        
-        self.cursor.execute(query, params)
-        return self.cursor.fetchall()
-
-    def update_task_status(self, task_id: int, status: str):
-        """Изменяет статус задачи."""
+    
+    def update_task_status(self, task_id: int, new_status: str):
+        """Обновление статуса задачи"""
         self.cursor.execute(
             "UPDATE tasks SET status = ? WHERE id = ?",
-            (status, task_id)
+            (new_status, task_id)
         )
-        self.conn.commit()
-
+        return self.connection.commit()
+    
     def delete_task(self, task_id: int):
-        """Удаляет задачу."""
+        """Удаление задачи"""
         self.cursor.execute(
-            "DELETE FROM tasks WHERE id = ?", 
+            "DELETE FROM tasks WHERE id = ?",
             (task_id,)
         )
-        self.conn.commit()
-
+        return self.connection.commit()
+    
+    # ========== Comments ==========
     def add_comment(self, task_id: int, username: str, text: str):
-        """Добавляет комментарий к задаче."""
+        """Добавление комментария к задаче"""
         self.cursor.execute(
-            """
-            INSERT INTO comments (task_id, username, text) 
-            VALUES (?, ?, ?)
-            """,
+            """INSERT INTO comments (task_id, username, text) 
+            VALUES (?, ?, ?)""",
             (task_id, username, text)
         )
-        self.conn.commit()
-
+        return self.connection.commit()
+    
     def get_task_comments(self, task_id: int):
-        """Возвращает комментарии задачи."""
+        """Получение комментариев задачи"""
         self.cursor.execute(
-            "SELECT * FROM comments WHERE task_id = ? ORDER BY created_at DESC",
+            """SELECT username, text, created_at 
+            FROM comments WHERE task_id = ? 
+            ORDER BY created_at""",
             (task_id,)
         )
         return self.cursor.fetchall()
-
+    
+    # ========== Utility Methods ==========
     def close(self):
-        """Закрывает соединение с БД."""
-        self.conn.close()
+        """Закрытие соединения с БД"""
+        self.connection.close()
+    
+    def __enter__(self):
+        """Поддержка контекстного менеджера"""
+        return self
+    
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        """Автоматическое закрытие соединения"""
+        self.close()
 
-# Инициализация БД при импорте
+# Инициализация глобального подключения
 db = Database()
+
+def init_database():
+    """Инициализация базы данных при старте"""
+    # Добавляем администратора, если его нет
+    admin_username = BotConfig.ADMIN_USERNAME
+    if not db.get_user(admin_username):
+        db.add_user(admin_username, Roles.ADMIN)

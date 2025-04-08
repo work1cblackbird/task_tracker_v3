@@ -1,106 +1,123 @@
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
-from telegram.ext import ContextTypes
-from config import Config
+# -*- coding: utf-8 -*-
+"""
+Модуль пагинации списка задач
+"""
 
-async def show_paginated_tasks(
-    update: Update,
-    context: ContextTypes.DEFAULT_TYPE,
-    tasks: list,
-    page: int = 1,
-    status_filter: str = None,
-    items_per_page: int = 5
-) -> None:
-    """
-    Отображает список задач с пагинацией и фильтрами.
-    
-    Args:
-        update: Объект Update от Telegram.
-        context: Контекст бота.
-        tasks: Список задач из БД.
-        page: Текущая страница (начинается с 1).
-        status_filter: Фильтр по статусу ('new', 'in_progress', 'done').
-        items_per_page: Количество задач на странице.
-    """
-    if not tasks:
-        await update.message.reply_text("Задачи не найдены.")
-        return
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+from config import Pagination as PaginationConfig
 
-    # Применяем фильтр по статусу (если указан)
-    if status_filter and status_filter.lower() in Config.TASK_STATUSES:
-        tasks = [task for task in tasks if task["status"] == status_filter]
+class Paginator:
+    """Класс для управления пагинацией списка задач"""
 
-    # Разбиваем задачи на страницы
-    total_pages = (len(tasks) // items_per_page) + (1 if len(tasks) % items_per_page != 0 else 0)
-    start_idx = (page - 1) * items_per_page
-    end_idx = start_idx + items_per_page
-    paginated_tasks = tasks[start_idx:end_idx]
+    def __init__(self):
+        self.items_per_page = PaginationConfig.TASKS_PER_PAGE
+        self.max_buttons = PaginationConfig.MAX_PAGE_BUTTONS
 
-    # Формируем текст сообщения
-    message_text = f"Страница {page}/{total_pages}\n"
-    if status_filter:
-        message_text += f"Фильтр: {status_filter}\n"
-    message_text += "───────────────────\n"
+    async def show_page(self, message, tasks, page=1, filters=None):
+        """
+        Отображение страницы с задачами
+        :param message: Объект сообщения Telegram
+        :param tasks: Полный список задач
+        :param page: Номер текущей страницы
+        :param filters: Примененные фильтры (для callback_data)
+        :return: None
+        """
+        total_pages = (len(tasks) + self.items_per_page - 1) // self.items_per_page
+        page = max(1, min(page, total_pages))
 
-    for task in paginated_tasks:
-        message_text += (
-            f"#{task['id']} — {task['description']}\n"
-            f"Статус: {task['status']} | Автор: @{task['created_by']}\n"
-            f"Дата: {task['created_at']}\n"
-            "───────────────────\n"
+        start_idx = (page - 1) * self.items_per_page
+        end_idx = start_idx + self.items_per_page
+        page_tasks = tasks[start_idx:end_idx]
+
+        # Формируем текст сообщения
+        text = self._generate_page_text(page, total_pages, filters)
+        
+        # Формируем клавиатуру с задачами и пагинацией
+        keyboard = self._generate_page_keyboard(page_tasks, page, total_pages, filters)
+
+        if hasattr(message, 'edit_text'):
+            await message.edit_text(text, reply_markup=keyboard)
+        else:
+            await message.reply_text(text, reply_markup=keyboard)
+
+    def _generate_page_text(self, page, total_pages, filters):
+        """Генерация текста для страницы"""
+        text = f"Страница {page}/{total_pages}\n"
+        
+        if filters:
+            filter_text = []
+            if filters.get('status'):
+                filter_text.append(f"статус: {filters['status']}")
+            if filters.get('period'):
+                filter_text.append(f"период: {filters['period']}")
+            if filter_text:
+                text += "Фильтры: " + ", ".join(filter_text) + "\n"
+        
+        text += "───────────────────"
+        return text
+
+    def _generate_page_keyboard(self, tasks, current_page, total_pages, filters):
+        """Генерация клавиатуры для страницы"""
+        keyboard = []
+        
+        # Кнопки задач
+        for task in tasks:
+            keyboard.append([
+                InlineKeyboardButton(
+                    f"#{task[0]} {task[1][:30]}... ({task[2]})",
+                    callback_data=f"task_{task[0]}")
+            ])
+        
+        # Кнопки пагинации
+        pagination_buttons = []
+        filter_prefix = self._get_filter_prefix(filters)
+        
+        # Кнопка "Назад"
+        if current_page > 1:
+            pagination_buttons.append(
+                InlineKeyboardButton(
+                    "⬅️", 
+                    callback_data=f"{filter_prefix}page_{current_page - 1}")
+            )
+        
+        # Номер текущей страницы
+        pagination_buttons.append(
+            InlineKeyboardButton(
+                f"{current_page}/{total_pages}", 
+                callback_data="ignore")
         )
-
-    # Создаем клавиатуру пагинации
-    keyboard = []
-    
-    # Кнопки переключения страниц
-    nav_buttons = []
-    if page > 1:
-        nav_buttons.append(InlineKeyboardButton("⬅️ Назад", callback_data=f"prev_{page}"))
-    if page < total_pages:
-        nav_buttons.append(InlineKeyboardButton("Вперед ➡️", callback_data=f"next_{page}"))
-    
-    if nav_buttons:
-        keyboard.append(nav_buttons)
-
-    # Кнопка фильтров (если нужно)
-    keyboard.append([InlineKeyboardButton("🔄 Фильтры", callback_data="open_filters")])
-
-    reply_markup = InlineKeyboardMarkup(keyboard)
-
-    # Отправляем/обновляем сообщение
-    if update.callback_query:
-        await update.callback_query.edit_message_text(
-            text=message_text,
-            reply_markup=reply_markup
+        
+        # Кнопка "Вперед"
+        if current_page < total_pages:
+            pagination_buttons.append(
+                InlineKeyboardButton(
+                    "➡️", 
+                    callback_data=f"{filter_prefix}page_{current_page + 1}")
+            )
+        
+        keyboard.append(pagination_buttons)
+        
+        # Дополнительные кнопки
+        additional_buttons = []
+        additional_buttons.append(
+            InlineKeyboardButton("➕ Создать задачу", callback_data="create_task")
         )
-    else:
-        await update.message.reply_text(
-            text=message_text,
-            reply_markup=reply_markup
+        additional_buttons.append(
+            InlineKeyboardButton("🔍 Фильтры", callback_data="filter_status")
         )
+        keyboard.append(additional_buttons)
+        
+        return InlineKeyboardMarkup(keyboard)
 
-async def handle_pagination_callback(
-    update: Update,
-    context: ContextTypes.DEFAULT_TYPE,
-    tasks: list
-) -> None:
-    """
-    Обрабатывает нажатия кнопок пагинации.
-    """
-    query = update.callback_query
-    data = query.data
-
-    if data.startswith("prev_"):
-        new_page = int(data.split("_")[1]) - 1
-    elif data.startswith("next_"):
-        new_page = int(data.split("_")[1]) + 1
-    else:
-        return
-
-    await show_paginated_tasks(
-        update=update,
-        context=context,
-        tasks=tasks,
-        page=new_page,
-        status_filter=context.user_data.get("current_filter")
-    )
+    def _get_filter_prefix(self, filters):
+        """Генерация префикса для callback_data с учетом фильтров"""
+        if not filters:
+            return ""
+        
+        prefix = []
+        if filters.get('status'):
+            prefix.append(f"status_{filters['status']}")
+        if filters.get('period'):
+            prefix.append(f"period_{filters['period']}")
+        
+        return "_".join(prefix) + "_" if prefix else ""

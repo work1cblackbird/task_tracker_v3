@@ -1,3 +1,10 @@
+# -*- coding: utf-8 -*-
+"""
+Главный модуль бота Task Tracker
+Точка входа и обработка основных команд
+"""
+
+import logging
 from telegram import Update
 from telegram.ext import (
     Application,
@@ -7,64 +14,82 @@ from telegram.ext import (
     filters,
     ContextTypes,
 )
+from config import BotConfig, Roles
+from database import db
+from utils.keyboards import get_main_menu_keyboard
 
-import config
-import database
-import handlers.tasks
-import handlers.users
-import handlers.comments
-import handlers.admin
-import utils.keyboards
-import utils.pagination
-import utils.filters
-import utils.calendar
+# Настройка логгирования
+logging.basicConfig(
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    level=logging.INFO
+)
+logger = logging.getLogger(__name__)
 
+class TaskTrackerBot:
+    def __init__(self):
+        self.application = Application.builder().token(BotConfig.BOT_TOKEN).build()
+        self._register_handlers()
 
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Обработчик команды /start."""
-    user = update.effective_user
-    role = database.get_user_role(user.username)
+    def _register_handlers(self):
+        """Регистрация всех обработчиков команд"""
+        self.application.add_handler(CommandHandler("start", self.start_handler))
+        self.application.add_handler(CommandHandler("help", self.help_handler))
+        self.application.add_handler(CallbackQueryHandler(self.button_handler))
+        self.application.add_handler(
+            MessageHandler(filters.TEXT & ~filters.COMMAND, self.message_handler)
+        )
 
-    if role == config.ROLES["ADMIN"]:
-        reply_markup = utils.keyboards.admin_main_menu()
-    elif role == config.ROLES["MANAGER"]:
-        reply_markup = utils.keyboards.manager_main_menu()
-    else:
-        reply_markup = utils.keyboards.user_main_menu()
+    async def start_handler(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Обработчик команды /start"""
+        user = update.effective_user
+        if not db.get_user(user.username):
+            db.add_user(user.username)
 
-    await update.message.reply_text(
-        "Главное меню:",
-        reply_markup=reply_markup
-    )
+        keyboard = get_main_menu_keyboard(user.username)
+        await update.message.reply_text(
+            f"Привет, {user.first_name}! Выберите действие:",
+            reply_markup=keyboard
+        )
 
+    async def help_handler(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Обработчик команды /help"""
+        help_text = """
+        📌 Доступные команды:
+        /start - Главное меню
+        /help - Справка
+        
+        Основные функции доступны через кнопки меню
+        """
+        await update.message.reply_text(help_text)
 
-async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Логирование ошибок."""
-    print(f"Ошибка в обработчике: {context.error}")
+    async def button_handler(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Обработчик нажатий на inline-кнопки"""
+        query = update.callback_query
+        await query.answer()
 
+        if query.data == "create_task":
+            context.user_data["awaiting_task"] = True
+            await query.message.reply_text("Введите описание задачи:")
 
-def main() -> None:
-    """Запуск бота."""
-    # Создаем приложение
-    application = Application.builder().token(config.BOT_TOKEN).build()
+    async def message_handler(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Обработчик текстовых сообщений"""
+        if context.user_data.get("awaiting_task"):
+            description = update.message.text
+            task_id = db.add_task(description, update.effective_user.username)
+            context.user_data.pop("awaiting_task")
+            await update.message.reply_text(f"Задача #{task_id} создана!")
+        else:
+            await update.message.reply_text("Используйте кнопки меню")
 
-    # Регистрируем обработчики команд
-    application.add_handler(CommandHandler("start", start))
-
-    # Регистрируем обработчики из модулей
-    application.add_handler(handlers.tasks.tasks_handlers())
-    application.add_handler(handlers.users.users_handlers())
-    application.add_handler(handlers.comments.comments_handlers())
-    application.add_handler(handlers.admin.admin_handlers())
-
-    # Регистрируем обработчик ошибок
-    application.add_error_handler(error_handler)
-
-    # Запускаем бота
-    application.run_polling(allowed_updates=Update.ALL_TYPES)
-
+    def run(self):
+        """Запуск бота"""
+        self.application.run_polling()
 
 if __name__ == "__main__":
-    # Инициализация БД при первом запуске
-    database.init_db()
-    main()
+    # Инициализация базы данных
+    if not db.get_user(BotConfig.ADMIN_USERNAME):
+        db.add_user(BotConfig.ADMIN_USERNAME, Roles.ADMIN)
+    
+    # Создание и запуск бота
+    bot = TaskTrackerBot()
+    bot.run()

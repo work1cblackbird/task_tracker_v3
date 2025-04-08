@@ -1,84 +1,95 @@
-class Config:
-    # Telegram Bot Token (получить у @BotFather)
-    BOT_TOKEN = "7631959629:AAFx_lCo0k5L6uyi1d0FykaJZBZOl9_SROI"
+# -*- coding: utf-8 -*-
+"""
+Конфигурационный файл бота Task Tracker
+Все константы собраны в одном месте без использования .env
+"""
 
-    # Админ бота (ваш Telegram username без @)
+class BotConfig:
+    """Настройки бота и администратора"""
+    # Токен бота (получить у @BotFather)
+    BOT_TOKEN = "ВАШ_ТОКЕН_БОТА"
+    
+    # Username администратора (без @)
     ADMIN_USERNAME = "NN_Danila_Belov"
-
-    # Пути к файлам
-    DATABASE_PATH = "database.db"
-    LOG_FILE = "bot.log"
-
-    # Роли пользователей
-    class Roles:
-        USER = "user"
-        MANAGER = "manager"
-        ADMIN = "admin"
-
-    # Статусы задач
-    class TaskStatus:
-        NEW = "new"
-        IN_PROGRESS = "in_progress"
-        DONE = "done"
-
-    # Настройки пагинации
-    class Pagination:
-        ITEMS_PER_PAGE = 5
-        MAX_PAGES_TO_SHOW = 5
-
-    # Настройки фильтров
-    class Filters:
-        DATE_FORMAT = "%d.%m.%Y"
-        DEFAULT_PERIOD_DAYS = 30
-
-    # Текстовые константы
-    class Text:
-        TASK_CREATED = "✅ Задача создана (ID: {task_id})"
-        NO_TASKS = "Задачи не найдены"
-        ACCESS_DENIED = "⛔ Доступ запрещен"
-
-
-class Handlers:
-    """Имена обработчиков для регистрации в приложении"""
     
-    # Основные команды
-    START = "start"
-    HELP = "help"
-    CANCEL = "cancel"
+    # ID чата для логов (опционально)
+    LOG_CHAT_ID = None
 
-    # Задачи
-    TASK_CREATE = "task_create"
-    TASK_LIST = "task_list"
-    TASK_DETAIL = "task_detail"
-    TASK_UPDATE = "task_update"
-    TASK_DELETE = "task_delete"
-
-    # Комментарии
-    COMMENT_ADD = "comment_add"
-    COMMENT_LIST = "comment_list"
-
-    # Администрирование
-    USER_LIST = "user_list"
-    USER_ROLE_UPDATE = "user_role_update"
-    USER_DELETE = "user_delete"
-
-
-class Keyboards:
-    """Типы клавиатур для генерации"""
+class Roles:
+    """Система ролей пользователей"""
+    USER = "Пользователь"
+    MANAGER = "Руководитель"
+    ADMIN = "Админ"
     
-    MAIN_MENU = "main_menu"
-    TASK_ACTIONS = "task_actions"
-    FILTERS = "filters"
-    DATE_PICKER = "date_picker"
-    CONFIRM = "confirm"
-
-
-class CallbackData:
-    """Префиксы callback-данных"""
+    # Доступные роли для назначения
+    ALLOWED_ROLES = [USER, MANAGER, ADMIN]
     
-    TASK_PREFIX = "task_"
-    COMMENT_PREFIX = "comment_"
-    USER_PREFIX = "user_"
-    PAGE_PREFIX = "page_"
-    FILTER_PREFIX = "filter_"
-    DATE_PREFIX = "date_"
+    # Роли по умолчанию для новых пользователей
+    DEFAULT_ROLE = USER
+
+class TaskStatuses:
+    """Статусы задач"""
+    NEW = "Новая"
+    IN_PROGRESS = "В работе"
+    DONE = "Выполнена"
+    
+    # Доступные статусы
+    ALL_STATUSES = [NEW, IN_PROGRESS, DONE]
+    
+    # Статус по умолчанию для новых задач
+    DEFAULT_STATUS = NEW
+
+class DatabaseConfig:
+    """Настройки базы данных"""
+    # Имя файла базы данных
+    DB_FILENAME = "task_tracker.db"
+    
+    # Максимальное количество соединений
+    POOL_SIZE = 5
+
+class Pagination:
+    """Настройки пагинации"""
+    # Количество задач на одной странице
+    TASKS_PER_PAGE = 5
+    
+    # Максимальное количество кнопок пагинации
+    MAX_PAGE_BUTTONS = 5
+
+class CalendarConfig:
+    """Настройки календаря"""
+    # Формат отображения даты
+    DATE_FORMAT = "%d.%m.%Y"
+    
+    # Доступные периоды для быстрого выбора
+    QUICK_PERIODS = {
+        "today": "Сегодня",
+        "week": "Неделя",
+        "month": "Месяц",
+        "all": "Все"
+    }
+
+class MessageTemplates:
+    """Шаблоны сообщений"""
+    TASK_CARD = """
+Задача #{id}
+——————————
+Описание: {description}
+Статус: {status}
+Автор: @{author}
+Дата: {date}
+——————————
+Комментарии ({comment_count}):
+{comments}
+——————————
+{buttons}
+"""
+    USER_CARD = """
+Пользователь: @{username}
+Роль: {role}
+——————————
+{buttons}
+"""
+
+# Проверка обязательных конфигов
+assert BotConfig.BOT_TOKEN != "ВАШ_ТОКЕН_БОТА", "Замените BOT_TOKEN на реальный токен бота"
+assert BotConfig.ADMIN_USERNAME, "Укажите ADMIN_USERNAME"

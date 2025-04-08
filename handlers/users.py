@@ -1,159 +1,120 @@
+# -*- coding: utf-8 -*-
+"""
+Модуль обработки пользовательских операций
+Регистрация, управление ролями, профиль
+"""
+
+import logging
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import ContextTypes, CommandHandler, CallbackQueryHandler
-from config import Config
-import database
+from telegram.ext import (
+    CommandHandler,
+    CallbackQueryHandler,
+    ContextTypes,
+)
+from config import BotConfig, Roles
+from database import db
+from utils.keyboards import get_back_button, get_main_menu_keyboard
 
+# Настройка логгирования
+logger = logging.getLogger(__name__)
 
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обработчик команды /start. Регистрирует пользователя или обновляет роль."""
-    user = update.effective_user
-    username = user.username
-    user_id = user.id
+class UserHandlers:
+    """Класс для обработки пользовательских операций"""
 
-    # Проверяем, является ли пользователь админом
-    if username == Config.ADMIN_USERNAME:
-        role = Config.ROLES["ADMIN"]
-    else:
-        role = Config.ROLES["USER"]
+    def __init__(self, application):
+        self.application = application
+        self._register_handlers()
 
-    # Добавляем/обновляем пользователя в БД
-    database.add_or_update_user(user_id, username, role)
-
-    # Формируем клавиатуру в зависимости от роли
-    if role == Config.ROLES["ADMIN"]:
-        keyboard = [
-            [InlineKeyboardButton("➕ Создать задачу", callback_data="create_task")],
-            [InlineKeyboardButton("📋 Все задачи", callback_data="all_tasks")],
-            [InlineKeyboardButton("👥 Управление пользователями", callback_data="manage_users")]
+    def _register_handlers(self):
+        """Регистрация обработчиков пользователей"""
+        handlers = [
+            CommandHandler("profile", self.profile_handler),
+            CallbackQueryHandler(self.manage_users_handler, pattern="^manage_users$"),
+            CallbackQueryHandler(self.change_role_handler, pattern="^change_role_"),
         ]
-    elif role == Config.ROLES["MANAGER"]:
-        keyboard = [
-            [InlineKeyboardButton("➕ Создать задачу", callback_data="create_task")],
-            [InlineKeyboardButton("📋 Все задачи", callback_data="all_tasks")]
-        ]
-    else:
-        keyboard = [
-            [InlineKeyboardButton("➕ Создать задачу", callback_data="create_task")],
-            [InlineKeyboardButton("📋 Мои задачи", callback_data="my_tasks")]
-        ]
+        for handler in handlers:
+            self.application.add_handler(handler)
 
-    reply_markup = InlineKeyboardMarkup(keyboard)
+    async def profile_handler(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Показать профиль пользователя"""
+        user = update.effective_user
+        user_data = db.get_user(user.username)
 
-    await update.message.reply_text(
-        f"Привет, {user.full_name}!\nВаша роль: {role}",
-        reply_markup=reply_markup
-    )
+        if not user_data:
+            db.add_user(user.username)
+            user_data = (user.username, Roles.DEFAULT_ROLE)
 
+        role_name = "👤 Пользователь" if user_data[1] == Roles.USER else \
+                   "👔 Руководитель" if user_data[1] == Roles.MANAGER else \
+                   "👑 Администратор"
 
-async def promote_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Повышение пользователя до руководителя (только для админа)."""
-    query = update.callback_query
-    user_id_to_promote = int(query.data.split("_")[1])
+        text = (
+            f"📌 Ваш профиль:\n"
+            f"Имя: {user.full_name}\n"
+            f"Username: @{user.username}\n"
+            f"Роль: {role_name}"
+        )
 
-    # Проверяем права текущего пользователя
-    current_user = query.from_user.username
-    if current_user != Config.ADMIN_USERNAME:
-        await query.answer("❌ Недостаточно прав!")
-        return
+        keyboard = []
+        if user.username == BotConfig.ADMIN_USERNAME:
+            keyboard.append([InlineKeyboardButton(
+                "Управление пользователями", 
+                callback_data="manage_users"
+            )])
 
-    # Обновляем роль в БД
-    database.update_user_role(user_id_to_promote, Config.ROLES["MANAGER"])
-    await query.answer(f"Пользователь повышен до {Config.ROLES['MANAGER']}")
-    await query.edit_message_text(
-        text=f"Роль пользователя обновлена: {Config.ROLES['MANAGER']}",
-        reply_markup=InlineKeyboardMarkup([
-            [InlineKeyboardButton("Назад к списку", callback_data="user_list")]
-        ])
-    )
+        keyboard.append([get_back_button()])
 
+        await update.message.reply_text(
+            text,
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
 
-async def demote_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Понижение пользователя до обычного (только для админа)."""
-    query = update.callback_query
-    user_id_to_demote = int(query.data.split("_")[1])
+    async def manage_users_handler(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Показать список пользователей для управления"""
+        if update.effective_user.username != BotConfig.ADMIN_USERNAME:
+            await update.callback_query.answer("Эта команда только для администратора!", show_alert=True)
+            return
 
-    # Проверяем права текущего пользователя
-    current_user = query.from_user.username
-    if current_user != Config.ADMIN_USERNAME:
-        await query.answer("❌ Недостаточно прав!")
-        return
+        users = db.get_all_users()
+        keyboard = []
 
-    # Обновляем роль в БД
-    database.update_user_role(user_id_to_demote, Config.ROLES["USER"])
-    await query.answer(f"Пользователь понижен до {Config.ROLES['USER']}")
-    await query.edit_message_text(
-        text=f"Роль пользователя обновлена: {Config.ROLES['USER']}",
-        reply_markup=InlineKeyboardMarkup([
-            [InlineKeyboardButton("Назад к списку", callback_data="user_list")]
-        ])
-    )
+        for user in users:
+            if user[1] == BotConfig.ADMIN_USERNAME:
+                continue
 
-
-async def delete_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Удаление пользователя (только для админа)."""
-    query = update.callback_query
-    user_id_to_delete = int(query.data.split("_")[1])
-
-    # Проверяем права текущего пользователя
-    current_user = query.from_user.username
-    if current_user != Config.ADMIN_USERNAME:
-        await query.answer("❌ Недостаточно прав!")
-        return
-
-    # Удаляем пользователя из БД
-    database.delete_user(user_id_to_delete)
-    await query.answer("Пользователь удалён")
-    await query.edit_message_text(
-        text="Пользователь успешно удалён",
-        reply_markup=InlineKeyboardMarkup([
-            [InlineKeyboardButton("Назад к списку", callback_data="user_list")]
-        ])
-    )
-
-
-async def show_user_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Отображение списка пользователей (только для админа)."""
-    query = update.callback_query
-    current_user = query.from_user.username
-
-    if current_user != Config.ADMIN_USERNAME:
-        await query.answer("❌ Недостаточно прав!")
-        return
-
-    users = database.get_all_users()
-    keyboard = []
-
-    for user in users:
-        user_id = user[0]
-        username = user[1]
-        role = user[2]
-
-        if role == Config.ROLES["USER"]:
+            role_icon = "👤" if user[2] == Roles.USER else "👔"
             keyboard.append([
-                InlineKeyboardButton(f"@{username} (Пользователь)", callback_data=f"user_{user_id}"),
-                InlineKeyboardButton("👔 Повысить", callback_data=f"promote_{user_id}")
+                InlineKeyboardButton(
+                    f"{role_icon} @{user[1]} ({user[2]})",
+                    callback_data=f"user_detail_{user[1]}"
+                )
             ])
-        elif role == Config.ROLES["MANAGER"]:
-            keyboard.append([
-                InlineKeyboardButton(f"@{username} (Руководитель)", callback_data=f"user_{user_id}"),
-                InlineKeyboardButton("👤 Понизить", callback_data=f"demote_{user_id}")
-            ])
-        keyboard.append([
-            InlineKeyboardButton("🗑 Удалить", callback_data=f"delete_{user_id}")
-        ])
 
-    keyboard.append([InlineKeyboardButton("🔙 Назад", callback_data="admin_menu")])
+        keyboard.append([get_back_button()])
 
-    await query.edit_message_text(
-        text="Список пользователей:",
-        reply_markup=InlineKeyboardMarkup(keyboard)
-    )
+        await update.callback_query.message.edit_text(
+            "Список пользователей:",
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
 
+    async def change_role_handler(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Изменение роли пользователя"""
+        if update.effective_user.username != BotConfig.ADMIN_USERNAME:
+            await update.callback_query.answer("Эта команда только для администратора!", show_alert=True)
+            return
 
-def setup_handlers(application):
-    """Регистрация обработчиков."""
-    application.add_handler(CommandHandler("start", start))
-    application.add_handler(CallbackQueryHandler(promote_user, pattern="^promote_"))
-    application.add_handler(CallbackQueryHandler(demote_user, pattern="^demote_"))
-    application.add_handler(CallbackQueryHandler(delete_user, pattern="^delete_"))
-    application.add_handler(CallbackQueryHandler(show_user_list, pattern="^user_list"))
+        data = update.callback_query.data.split("_")
+        username = data[2]
+        new_role = data[3]
+
+        if username == BotConfig.ADMIN_USERNAME:
+            await update.callback_query.answer("Нельзя изменить роль администратора!", show_alert=True)
+            return
+
+        db.update_user_role(username, new_role)
+        await update.callback_query.answer(f"Роль пользователя @{username} изменена")
+        await self.manage_users_handler(update, context)
+
+def register_user_handlers(application):
+    """Функция для регистрации обработчиков пользователей"""
+    UserHandlers(application)
